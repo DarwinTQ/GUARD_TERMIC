@@ -1,0 +1,79 @@
+# TermicGuard - pila local completa
+#   docker compose up -d --build
+#
+# Puertos publicados en la laptop (10.103.180.103):
+#   1883  MQTT TCP        <- nodos ESP32
+#   9001  MQTT WebSocket  <- app Flutter (web / movil / desktop)
+#   8001  API REST        <- historial para la app
+#  27017  MongoDB         <- MongoDB Compass
+
+name: termic-guard
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: tg-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-datos:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: tg-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # nodos ESP32
+      - "9001:9001"   # navegador / app Flutter
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-datos:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -t '$$SYS/#' -C 1 -W 3 || exit 1"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 10s
+
+  # Puente MQTT -> MongoDB. Es el unico que escribe en la base de datos.
+  ingesta:
+    build: ./servicios
+    container_name: tg-ingesta
+    restart: unless-stopped
+    command: python -m ingesta
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+
+  # API REST de solo lectura: historial y estado de los nodos.
+  api:
+    build: ./servicios
+    container_name: tg-api
+    restart: unless-stopped
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+volumes:
+  mongo-datos:
+  mosquitto-datos:
+  mosquitto-log:

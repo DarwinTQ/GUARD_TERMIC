@@ -1,7 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Necesario en release: la app habla con el broker MQTT y con la API.
+         El manifest de debug ya lo incluye, pero el de produccion no. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
     <application
-        android:label="guard"
+        android:label="TermicGuard"
         android:name="${applicationName}"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
