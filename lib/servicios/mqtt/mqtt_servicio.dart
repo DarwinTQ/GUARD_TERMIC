@@ -6,6 +6,7 @@ import 'package:mqtt_client/mqtt_client.dart';
 
 import '../../config/ajustes.dart';
 import '../../modelos/lectura.dart';
+import '../../modelos/metricas.dart';
 import '../../modelos/nodo.dart';
 import 'fabrica_cliente.dart';
 
@@ -45,6 +46,9 @@ class MqttServicio {
 
   MqttClient? _cliente;
   StreamSubscription<List<MqttReceivedMessage<MqttMessage>>>? _suscripcion;
+
+  /// Sondas de ida y vuelta lanzadas y aun sin eco, indexadas por su id.
+  final Map<String, _SondaPendiente> _sondas = {};
 
   final _eventos = StreamController<EventoMqtt>.broadcast();
   final _conexion = StreamController<EstadoConexion>.broadcast();
@@ -120,6 +124,9 @@ class MqttServicio {
 
     cliente.subscribe(Ajustes.topicoTelemetria, MqttQos.atMostOnce);
     cliente.subscribe(Ajustes.topicoEstado, MqttQos.atLeastOnce);
+    // Nos suscribimos a nuestro propio topico de sonda: el broker devuelve
+    // lo que publicamos y ese viaje completo es el RTT que se mide.
+    cliente.subscribe(Ajustes.topicoSonda, MqttQos.atMostOnce);
 
     _suscripcion = cliente.updates?.listen(_procesarMensajes);
     _emitirConexion(EstadoConexion.conectado);
@@ -132,13 +139,19 @@ class MqttServicio {
       final publicacion = mensaje.payload;
       if (publicacion is! MqttPublishMessage) continue;
 
-      final nodo = _nodoDesdeTopico(mensaje.topic);
-      if (nodo == null) continue;
-
       final texto = utf8.decode(
         publicacion.payload.message,
         allowMalformed: true,
       );
+
+      // El eco de nuestras propias sondas se resuelve antes: no es un nodo.
+      if (mensaje.topic == Ajustes.topicoSonda) {
+        _resolverSonda(texto.trim());
+        continue;
+      }
+
+      final nodo = _nodoDesdeTopico(mensaje.topic);
+      if (nodo == null) continue;
 
       if (mensaje.topic.contains('/telemetria/')) {
         _emitirLectura(nodo, texto, recibida);
@@ -168,17 +181,91 @@ class MqttServicio {
     return partes.length == 3 && partes[2].isNotEmpty ? partes[2] : null;
   }
 
+  // ----------------------------------------------------------------- sondeo
+
+  /// Mide el tiempo de ida y vuelta real contra el broker.
+  ///
+  /// Publica un identificador en [Ajustes.topicoSonda], al que esta app esta
+  /// suscrita, y cronometra hasta que el propio broker se lo devuelve. Es
+  /// una medicion de extremo a extremo: incluye WebSocket, encolado en
+  /// Mosquitto y entrega, que es exactamente el camino que recorren las
+  /// lecturas de los nodos.
+  ///
+  /// Nunca lanza: un fallo tambien es una muestra.
+  Future<MuestraLatencia> sondear() async {
+    final inicio = DateTime.now();
+    final cliente = _cliente;
+
+    if (cliente == null || _estado != EstadoConexion.conectado) {
+      return MuestraLatencia.fallida(
+        instante: inicio,
+        detalle: 'Sin conexion con el broker',
+      );
+    }
+
+    final id = 'sonda-${inicio.microsecondsSinceEpoch}';
+    final pendiente = _SondaPendiente();
+    _sondas[id] = pendiente;
+
+    try {
+      final constructor = MqttClientPayloadBuilder()..addString(id);
+      cliente.publishMessage(
+        Ajustes.topicoSonda,
+        MqttQos.atMostOnce,
+        constructor.payload!,
+      );
+    } catch (_) {
+      _sondas.remove(id);
+      return MuestraLatencia.fallida(
+        instante: inicio,
+        detalle: 'No se pudo publicar la sonda',
+      );
+    }
+
+    try {
+      final duracion =
+          await pendiente.completado.future.timeout(Ajustes.tiempoLimiteSonda);
+      return MuestraLatencia(instante: inicio, duracion: duracion);
+    } on TimeoutException {
+      return MuestraLatencia.fallida(
+        instante: inicio,
+        detalle: 'Sin eco en ${Ajustes.tiempoLimiteSonda.inSeconds} s',
+      );
+    } finally {
+      _sondas.remove(id);
+    }
+  }
+
+  void _resolverSonda(String id) {
+    final pendiente = _sondas[id];
+    if (pendiente == null || pendiente.completado.isCompleted) return;
+    pendiente.completado.complete(pendiente.reloj.elapsed);
+  }
+
   Future<void> desconectar() async {
     await _suscripcion?.cancel();
     _suscripcion = null;
+    _descartarSondas();
     _cliente?.disconnect();
     _cliente = null;
     _emitirConexion(EstadoConexion.desconectado);
   }
+
+  /// Las sondas en vuelo ya no recibiran eco: se dejan expirar por timeout
+  /// en lugar de completarse, para no inventar una latencia que no hubo.
+  void _descartarSondas() => _sondas.clear();
 
   Future<void> liberar() async {
     await desconectar();
     await _eventos.close();
     await _conexion.close();
   }
+}
+
+/// Sonda publicada y a la espera de su eco.
+class _SondaPendiente {
+  _SondaPendiente() : reloj = Stopwatch()..start();
+
+  final Stopwatch reloj;
+  final Completer<Duration> completado = Completer<Duration>();
 }

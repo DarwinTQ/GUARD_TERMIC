@@ -77,11 +77,18 @@ class TarjetaNodo extends StatelessWidget {
               if (ultima == null)
                 Text('-- °C', style: tema.textTheme.headlineSmall)
               else
+                // Flexibles y no de ancho natural: la tarjeta se usa tanto en
+                // la rejilla del resumen como en la tira estrecha del movil, y
+                // dos temperaturas de ancho fijo no caben en la segunda.
                 Row(
                   children: [
-                    _valor(context, ultima.sensor1, Paleta.sensor1),
-                    const SizedBox(width: 14),
-                    _valor(context, ultima.sensor2, Paleta.sensor2),
+                    Expanded(
+                      child: _valor(context, ultima.sensor1, Paleta.sensor1),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _valor(context, ultima.sensor2, Paleta.sensor2),
+                    ),
                   ],
                 ),
               const SizedBox(height: 10),
@@ -101,10 +108,12 @@ class TarjetaNodo extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           '${temperatura.toStringAsFixed(1)} °C',
-          style: Theme.of(context)
-              .textTheme
-              .titleMedium
-              ?.copyWith(fontWeight: FontWeight.bold),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
         ),
       ],
     );

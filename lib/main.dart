@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'pantallas/pantalla_monitor.dart';
+import 'pantallas/pantalla_principal.dart';
 
 void main() => runApp(const AppTermicGuard());
 
@@ -8,6 +8,7 @@ void main() => runApp(const AppTermicGuard());
 ///
 /// Un solo codigo para movil, desktop y web: el tiempo real entra por MQTT
 /// sobre WebSocket (ver `servicios/mqtt/`) y el historial por la API REST.
+/// La navegacion entre vistas vive en `pantallas/pantalla_principal.dart`.
 class AppTermicGuard extends StatelessWidget {
   const AppTermicGuard({super.key});
 
@@ -30,7 +31,7 @@ class AppTermicGuard extends StatelessWidget {
       ),
       // Sigue el tema del sistema: en desktop y web se nota.
       themeMode: ThemeMode.system,
-      home: const PantallaMonitor(),
+      home: const PantallaPrincipal(),
     );
   }
 }
