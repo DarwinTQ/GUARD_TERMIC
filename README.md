@@ -4,6 +4,9 @@ Monitorización de temperatura en tiempo real para una red de nodos ESP32.
 Cada nodo publica dos temperaturas por MQTT, un servicio las persiste en
 MongoDB y una única app Flutter las muestra en vivo en **móvil, desktop y web**.
 
+> Este documento es la guía de uso. Para la arquitectura, el modelo de datos,
+> los protocolos y los diagramas, ver **[`DOC.md`](DOC.md)**.
+
 ---
 
 ## Arquitectura
@@ -88,7 +91,7 @@ docker compose logs -f ingesta         # debe mostrar cada lectura guardada
    ```cpp
    const char* WIFI_SSID     = "tu_red";
    const char* WIFI_PASSWORD = "tu_clave";
-   const char* MQTT_HOST     = "10.103.180.103";   // IP de esta laptop
+   const char* MQTT_HOST     = "10.137.195.103";   // IP de esta laptop
    ```
 
 4. Sube el sketch. El monitor serie (115200 baudios) mostrará las publicaciones.
@@ -108,7 +111,7 @@ python infra/servicios/herramientas/simulador_nodos.py --nodos 3
 ### 3. Lanzar la app
 
 La IP del backend está en `lib/config/ajustes.dart` (por defecto
-`10.103.180.103`) y se puede sobrescribir al compilar, sin tocar código:
+`10.137.195.103`) y se puede sobrescribir al compilar, sin tocar código:
 
 ```bash
 # Web
@@ -207,9 +210,12 @@ Documentación interactiva en **http://localhost:8001/docs**.
 | Método | Ruta | Descripción |
 |---|---|---|
 | `GET` | `/` | estado del servicio y de la conexión a Mongo |
-| `GET` | `/lecturas?limite=50&dispositivo=esp32-01` | historial, **más reciente primero**; `limite` entre 1 y 1000, `dispositivo` opcional |
+| `GET` | `/lecturas?limite=50&dispositivo=esp32-01&desplazamiento=0` | historial, **más reciente primero**; `limite` entre 1 y 1000, `dispositivo` y `desplazamiento` opcionales |
+| `GET` | `/lecturas/total?dispositivo=esp32-01` | número de lecturas almacenadas, para paginar |
 | `GET` | `/lecturas/ultima?dispositivo=esp32-01` | última lectura; 404 si no hay ninguna |
 | `GET` | `/dispositivos` | nodos conocidos, su estado y su última lectura |
+| `GET` | `/estadisticas?horas=24` | mínimo, máximo, media y cadencia por nodo, agregados por Mongo; sin `horas`, todo el histórico |
+| `GET` | `/bd/resumen` | colecciones, documentos, tamaño e índices de la base |
 
 La API es de **solo lectura**: no hay forma de inyectar datos por HTTP, todo
 entra por MQTT.
@@ -247,24 +253,45 @@ termic_guard/
 │       ├── api/main.py            MongoDB ──► REST
 │       └── herramientas/
 │           └── simulador_nodos.py N nodos falsos para probar sin hardware
-└── lib/                           app Flutter
-    ├── config/                    ajustes.dart (IP, puertos, tópicos), paleta.dart
-    ├── modelos/                   lectura.dart, nodo.dart  (inmutables)
-    ├── servicios/
-    │   ├── api_rest.dart          carga del historial
-    │   └── mqtt/                  enlace en vivo
-    │       ├── fabrica_cliente.dart   export condicional según plataforma
-    │       ├── fabrica_nativa.dart    móvil y desktop
-    │       ├── fabrica_web.dart       navegador
-    │       └── mqtt_servicio.dart     suscripción, reconexión y parseo
-    ├── estado/monitor_controlador.dart  fusiona REST + MQTT (ChangeNotifier)
-    ├── pantallas/pantalla_monitor.dart  layout adaptativo
-    └── widgets/                   tarjeta de nodo, gráfica, detalle, estado
+├── lib/                           app Flutter
+│   ├── config/                    ajustes.dart (IP, puertos, tópicos), paleta.dart
+│   ├── util/formato.dart          formateo de tiempos, tamaños y temperaturas
+│   ├── modelos/                   lectura, nodo, métricas, estadística, resumen_bd
+│   ├── servicios/
+│   │   ├── api_rest.dart          historial, agregados y sondeo de latencia
+│   │   └── mqtt/                  enlace en vivo
+│   │       ├── fabrica_cliente.dart   export condicional según plataforma
+│   │       ├── fabrica_nativa.dart    móvil y desktop
+│   │       ├── fabrica_web.dart       navegador
+│   │       └── mqtt_servicio.dart     suscripción, reconexión, parseo y sonda RTT
+│   ├── estado/
+│   │   ├── monitor_controlador.dart   fusiona REST + MQTT (ChangeNotifier)
+│   │   └── explorador_bd.dart         consulta a la BD, bajo demanda
+│   ├── pantallas/
+│   │   ├── pantalla_principal.dart    menú lateral + vista activa
+│   │   └── vistas/                    las seis vistas del dashboard
+│   └── widgets/                   gráficas, KPIs, tarjetas y secciones
+├── test/vistas_test.dart          prueba de humo de las vistas
+└── DOC.md                         documentación técnica con diagramas
 ```
 
-La app no usa paquetes de gestión de estado: un `ChangeNotifier` y
-`ListenableBuilder` bastan para una pantalla, y así no hay dependencias ni
-generación de código que mantener.
+La app no usa paquetes de gestión de estado: dos `ChangeNotifier` y
+`ListenableBuilder` bastan, y así no hay dependencias ni generación de código
+que mantener.
+
+### Las seis vistas
+
+| Vista | Qué muestra |
+|---|---|
+| **Resumen** | KPIs globales, una tarjeta por nodo con su tendencia y la salud del enlace |
+| **Nodos en vivo** | Gráfica de temperatura con eje temporal deslizante (1, 5, 15 min o todo) |
+| **Tiempos de respuesta** | Latencia de la API y RTT del broker: actual, media, p95, máximo y disponibilidad |
+| **Tiempos de llegada** | Cadencia real de cada nodo frente al nominal de 5 s: media, jitter, p95 y huecos |
+| **Base de datos** | Colecciones, índices, agregados por nodo y tabla paginada de lecturas |
+| **Sistema** | Configuración efectiva de la compilación y guía de diagnóstico |
+
+El menú de la izquierda se adapta: texto completo en pantallas anchas, solo
+iconos en intermedias y cajón lateral en móvil.
 
 ---
 
@@ -290,7 +317,7 @@ generación de código que mantener.
 |---|---|
 | La app dice **"Broker inalcanzable"** | La pila no está arriba (`docker compose ps`) o el firewall de Windows bloquea el puerto. Permite 1883, 9001, 8001 y 27017 para Docker en redes privadas. |
 | Conecta pero **ningún nodo publica** | Ningún ESP32 encendido. Arranca el simulador para descartar problemas de app. |
-| Funciona en web pero **no en el móvil** | El móvil debe estar en la misma WiFi y `TG_HOST` apuntar a la IP de la laptop (`10.103.180.103`), no a `localhost`. |
+| Funciona en web pero **no en el móvil** | El móvil debe estar en la misma WiFi y `TG_HOST` apuntar a la IP de la laptop (`10.137.195.103`), no a `localhost`. |
 | Funciona en el móvil pero **no en el emulador** | En el emulador de Android la laptop es `10.0.2.2`: `flutter run --dart-define=TG_HOST=10.0.2.2`. |
 | El ESP32 no conecta al broker | Revisa `MQTT_HOST` en el sketch y que la laptop no haya cambiado de IP (el DHCP la puede mover). |
 | Sin red en una build **release de Android** | Ya está resuelto: el manifest principal incluye `INTERNET` y `usesCleartextTraffic`. Si lo regeneras, vuelve a añadirlos. |
