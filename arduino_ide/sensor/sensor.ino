@@ -26,18 +26,18 @@
 // ======================= CONFIGURACION =======================
 
 // --- Red WiFi ---
-const char* WIFI_SSID     = "CAMBIAME";
-const char* WIFI_PASSWORD = "CAMBIAME";
+const char* WIFI_SSID     = "Papitaa";
+const char* WIFI_PASSWORD = "person123";
 
 // --- Broker MQTT (IP de la laptop que corre docker compose) ---
-const char* MQTT_HOST = "10.103.180.103";
+const char* MQTT_HOST = "10.137.195.103";
 const uint16_t MQTT_PORT = 1883;
 const char* MQTT_USUARIO  = "";  // vacio = acceso anonimo (perfil local)
 const char* MQTT_CLAVE    = "";
 
 // --- Identidad del nodo ---
 // Vacio => se deriva de la MAC. Rellenar solo si se quiere un nombre fijo.
-const char* NODO_ID = "";
+const char* NODO_ID = "nodo2";
 
 // --- Comportamiento ---
 const uint32_t INTERVALO_MS = 5000;  // cada cuanto se publica una lectura
