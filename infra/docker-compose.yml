@@ -1,7 +1,7 @@
 # TermicGuard - pila local completa
 #   docker compose up -d --build
 #
-# Puertos publicados en la laptop (10.103.180.103):
+# Puertos publicados en la laptop (10.137.195.103):
 #   1883  MQTT TCP        <- nodos ESP32
 #   9001  MQTT WebSocket  <- app Flutter (web / movil / desktop)
 #   8001  API REST        <- historial para la app

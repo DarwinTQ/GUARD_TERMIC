@@ -10,12 +10,13 @@ Documentacion interactiva: http://<host>:8001/docs
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from comun.almacen import Almacen
-from comun.modelos import dispositivo_a_json, lectura_a_json
+from comun.almacen import Almacen, ahora_utc
+from comun.modelos import dispositivo_a_json, estadistica_a_json, lectura_a_json
 
 _almacen: Almacen | None = None
 
@@ -66,9 +67,21 @@ def estado(almacen: Almacen = Depends(obtener_almacen)) -> dict:
 def listar_lecturas(
     limite: int = Query(50, ge=1, le=1000),
     dispositivo: str | None = Query(None, description="Filtra por un nodo concreto"),
+    desplazamiento: int = Query(0, ge=0, description="Saltar N lecturas (paginacion)"),
     almacen: Almacen = Depends(obtener_almacen),
 ) -> list[dict]:
-    return [lectura_a_json(d) for d in almacen.historial(limite, dispositivo)]
+    return [
+        lectura_a_json(d)
+        for d in almacen.historial(limite, dispositivo, desplazamiento)
+    ]
+
+
+@app.get("/lecturas/total", summary="Numero de lecturas almacenadas")
+def total_lecturas(
+    dispositivo: str | None = Query(None),
+    almacen: Almacen = Depends(obtener_almacen),
+) -> dict:
+    return {"total": almacen.contar_lecturas(dispositivo)}
 
 
 @app.get("/lecturas/ultima", summary="Ultima lectura registrada")
@@ -85,3 +98,22 @@ def ultima_lectura(
 @app.get("/dispositivos", summary="Nodos conocidos y su estado")
 def listar_dispositivos(almacen: Almacen = Depends(obtener_almacen)) -> list[dict]:
     return [dispositivo_a_json(d) for d in almacen.listar_dispositivos()]
+
+
+@app.get("/estadisticas", summary="Agregados por nodo sobre la serie completa")
+def listar_estadisticas(
+    horas: int | None = Query(
+        None,
+        ge=1,
+        le=8760,
+        description="Limita el calculo a las ultimas N horas; sin valor, todo el historico",
+    ),
+    almacen: Almacen = Depends(obtener_almacen),
+) -> list[dict]:
+    desde = ahora_utc() - timedelta(hours=horas) if horas else None
+    return [estadistica_a_json(d) for d in almacen.estadisticas(desde)]
+
+
+@app.get("/bd/resumen", summary="Colecciones, indices y tamaño de la base")
+def resumen_bd(almacen: Almacen = Depends(obtener_almacen)) -> dict:
+    return almacen.resumen_bd()

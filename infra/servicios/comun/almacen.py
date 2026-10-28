@@ -119,11 +119,29 @@ class Almacen:
 
     # --------------------------------------------------------------- lectura
 
-    def historial(self, limite: int = 50, dispositivo: str | None = None) -> list[dict]:
-        """Lecturas mas recientes primero (el cliente invierte para graficar)."""
+    def historial(
+        self,
+        limite: int = 50,
+        dispositivo: str | None = None,
+        desplazamiento: int = 0,
+    ) -> list[dict]:
+        """Lecturas mas recientes primero (el cliente invierte para graficar).
+
+        `desplazamiento` pagina hacia atras en el tiempo: la vista de base de
+        datos recorre la tabla sin traerse la coleccion entera.
+        """
         filtro = {"dispositivo": dispositivo} if dispositivo else {}
-        cursor = self.lecturas.find(filtro).sort("fecha", DESCENDING).limit(limite)
+        cursor = (
+            self.lecturas.find(filtro)
+            .sort("fecha", DESCENDING)
+            .skip(desplazamiento)
+            .limit(limite)
+        )
         return list(cursor)
+
+    def contar_lecturas(self, dispositivo: str | None = None) -> int:
+        filtro = {"dispositivo": dispositivo} if dispositivo else {}
+        return self.lecturas.count_documents(filtro)
 
     def ultima(self, dispositivo: str | None = None) -> dict | None:
         filtro = {"dispositivo": dispositivo} if dispositivo else {}
@@ -131,3 +149,82 @@ class Almacen:
 
     def listar_dispositivos(self) -> Iterable[dict]:
         return self.dispositivos.find().sort("_id", ASCENDING)
+
+    # ------------------------------------------------------------ agregados
+
+    def estadisticas(self, desde: datetime | None = None) -> list[dict]:
+        """Resumen por nodo calculado en el servidor, no en el cliente.
+
+        Mongo agrega sobre toda la serie; la app solo guarda una ventana de
+        120 puntos, asi que estos minimos y maximos son los reales, no los
+        de lo que hay en pantalla.
+
+        El indice `dispositivo_fecha` cubre el $match por fecha y el $group.
+        """
+        etapas: list[dict[str, Any]] = []
+        if desde is not None:
+            etapas.append({"$match": {"fecha": {"$gte": desde}}})
+        etapas.append(
+            {
+                "$group": {
+                    "_id": "$dispositivo",
+                    "lecturas": {"$sum": 1},
+                    "sensor1_min": {"$min": "$sensor1"},
+                    "sensor1_max": {"$max": "$sensor1"},
+                    "sensor1_prom": {"$avg": "$sensor1"},
+                    "sensor2_min": {"$min": "$sensor2"},
+                    "sensor2_max": {"$max": "$sensor2"},
+                    "sensor2_prom": {"$avg": "$sensor2"},
+                    "rssi_prom": {"$avg": "$rssi"},
+                    "primera": {"$min": "$fecha"},
+                    "ultima": {"$max": "$fecha"},
+                }
+            }
+        )
+        etapas.append({"$sort": {"_id": ASCENDING}})
+        return list(self.lecturas.aggregate(etapas))
+
+    def resumen_bd(self) -> dict:
+        """Metadatos de la base para la vista de base de datos del dashboard.
+
+        `collStats` no existe en todos los despliegues (Atlas serverless lo
+        restringe), asi que el tamaño es opcional: el conteo y los indices
+        se obtienen siempre.
+        """
+        colecciones = []
+        for nombre in ("lecturas", "dispositivos"):
+            coleccion = self._bd[nombre]
+            info: dict[str, Any] = {
+                "nombre": nombre,
+                "documentos": coleccion.count_documents({}),
+                "indices": [
+                    {
+                        "nombre": clave,
+                        "campos": [
+                            f"{campo}:{orden}" for campo, orden in valor["key"]
+                        ],
+                    }
+                    for clave, valor in coleccion.index_information().items()
+                ],
+                "bytes": None,
+                "bytes_indices": None,
+            }
+            try:
+                estadisticas = self._bd.command("collstats", nombre)
+                info["bytes"] = estadisticas.get("size")
+                info["bytes_indices"] = estadisticas.get("totalIndexSize")
+            except Exception:  # pragma: no cover - depende del despliegue
+                pass
+            colecciones.append(info)
+
+        return {
+            "base_datos": self._bd.name,
+            "servidor": self._version_servidor(),
+            "colecciones": colecciones,
+        }
+
+    def _version_servidor(self) -> str | None:
+        try:
+            return self._cliente.server_info().get("version")
+        except Exception:  # pragma: no cover - Mongo caido
+            return None

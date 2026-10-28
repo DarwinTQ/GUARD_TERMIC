@@ -7,7 +7,7 @@ pila no distingue un nodo simulado de uno real.
 Uso (con la pila levantada):
     pip install paho-mqtt
     python simulador_nodos.py --nodos 3
-    python simulador_nodos.py --nodos 2 --host 10.103.180.103 --intervalo 2
+    python simulador_nodos.py --nodos 2 --host 10.137.195.103 --intervalo 2
 """
 
 from __future__ import annotations
